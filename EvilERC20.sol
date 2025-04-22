@@ -4,12 +4,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/**
- * @title MaliciousERC20
- * @dev A malicious ERC20 token with multiple attack vectors for security testing.
- * WARNING: DO NOT DEPLOY IN PRODUCTION. FOR SECURITY TESTING ONLY.
- */
-contract MaliciousERC20 is ERC20, ReentrancyGuard {
+contract EvilERC20 is ERC20, ReentrancyGuard {
     uint8 private _decimals;
     bool private _transferShouldFail;
     
