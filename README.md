@@ -217,7 +217,9 @@ The contract implements a standard ERC20 interface but contains numerous malicio
 
 ## Disclaimer
 
-The authors of this code do not endorse or encourage any malicious use of this software. This code is provided strictly for educational and security research purposes. The repository maintainers are not responsible for any misuse of this code.
+I, Pavon Dunbar, do not endorse or encourage any malicious use of this software. This code is provided strictly for educational and security research purposes. 
+
+Furthermore, I, Pavon Dunbar, am not responsible for any misuse of this code.
 
 By accessing, using, or studying this code, you acknowledge that you understand its educational purpose and agree to use it responsibly.
 
