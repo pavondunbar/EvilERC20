@@ -1,4 +1,4 @@
-# Malicious ERC20 Token - Comprehensive Security Research & Testing Contract
+# EvilERC20 Token - Comprehensive Security Research & Testing Contract
 
 ⚠️ **WARNING: EDUCATIONAL PURPOSES ONLY** ⚠️
 
